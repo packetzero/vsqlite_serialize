@@ -2,7 +2,7 @@
 
 #include <crow.hpp>
 #include <crow/crow_decode.hpp>
-#include <unordered_map>
+#include <unordered_set>
 
 #include "utils.h"
 
@@ -13,15 +13,49 @@ static const SPFieldDef COLISFOUND = FieldDef::alloc(TUINT8, "__isfound");
 
 namespace vsqlite {
 
-  class MyDecoderListener : public crow::DecoderListener {
+  /*
+   * This decoder listener just extracts encoded rows, not the decoded rows.
+   * It's the first pass.
+   */
+  class RawRowsDecoderListener : public crow::DecoderListener {
   public:
 
-    virtual ~MyDecoderListener() {
+    virtual ~RawRowsDecoderListener() {
     }
     
-    MyDecoderListener(std::vector<SPFieldDef> &colIds) : crow::DecoderListener(), _rownum(0), _rows(), _colIds(colIds), _encodedRows() {
+    RawRowsDecoderListener(std::unordered_set<std::string> &encodedRows, std::string &encodedHeaderRow) : crow::DecoderListener(), _rownum(0), _encodedRows(encodedRows), _encodedHeaderRow(encodedHeaderRow) {
     }
 
+    void onRowEnd(bool isHeaderRow, const uint8_t* pEncodedRowStart, size_t length) override {
+      std::string encodedRow;
+      encodedRow.append((const char *)pEncodedRowStart, length);
+      if (isHeaderRow) {
+        _encodedHeaderRow = encodedRow;
+      } else {
+        _encodedRows.insert(encodedRow);
+        _rownum++;
+      }
+    }
+
+    size_t _rownum;
+    std::unordered_set<std::string> &_encodedRows;
+    std::string &_encodedHeaderRow;
+  };
+
+  /*
+   * This decoder listener reassembles rows.
+   * It's used in the second pass on the portion of historical data
+   * containing removed rows only.
+   */
+  class MyRowDecoderListener : public crow::DecoderListener {
+  public:
+    
+    virtual ~MyRowDecoderListener() {
+    }
+    
+    MyRowDecoderListener(std::vector<SPFieldDef> &colIds) : crow::DecoderListener(), _rownum(0), _rows(), _colIds(colIds)  {
+    }
+    
     virtual void onField(crow::SPCFieldInfo fieldDef, int8_t value, uint8_t flags) override {
       SPFieldDef colId = getAppField(fieldDef);
       CHECK_COL(colId);
@@ -68,7 +102,7 @@ namespace vsqlite {
       CHECK_COL(colId);
       getRow()[colId] = DynVal(value);
     }
-
+    
     DynMap &getRow() {
       // add row if needed
       if (_rows.size() <= _rownum) {
@@ -90,28 +124,19 @@ namespace vsqlite {
       }
       return nullptr;
     }
-
-    /*
-     * Notifies when a row is finished.
-     *
-     * For applications doing differential comparisons with
-     * new vs persisted data, pEncodedRowStart,length are included.
-     */
-    virtual void onRowEnd(const uint8_t* pEncodedRowStart, size_t length) override {
-      std::string encodedRow;
-      encodedRow.append((const char *)pEncodedRowStart, length);
-      std::string encodedRowHex;
-      vsqlite_utils::BytesToHexString(encodedRow, encodedRowHex);
-      _encodedRows[encodedRow] = _rownum;
-      _rownum++;
+    
+    void onRowEnd(bool isHeaderRow, const uint8_t* pEncodedRowStart, size_t length) override {
+      if (!isHeaderRow) {
+        _rownum++;
+      }
     }
-
+    
     size_t _rownum;
     std::vector<DynMap > _rows;
     std::vector<SPFieldDef> &_colIds;
-    std::unordered_map<std::string, size_t> _encodedRows;
   };
 
+  
 class CrowResultsSerializer : public ResultsSerializer {
 public:
   virtual ~CrowResultsSerializer() {
@@ -135,12 +160,17 @@ public:
       for (auto &id : knownColumnIds) { _colIds.push_back(id); }
     }
 
-    // handle historical data
+    // extract encoded rows data from historical_data.
+    // This is kind of like doing a historical_data.split(\n)
+
     if (!historical_data.empty()) {
-      _decoderListener = std::make_shared<MyDecoderListener>(_colIds);
+      RawRowsDecoderListener decoderListener(_histEncodedRows, _histEncodedHeaderRow);
 
       crow::Decoder *_pDec = crow::DecoderFactory::New((const uint8_t*)historical_data.data(), historical_data.size());
-      _pDec->decode(*_decoderListener.get());
+      _pDec->setModeFlags(DECODER_MODE_SKIP);
+      _pDec->decode(decoderListener);
+      _histTotalRows = decoderListener._rownum;
+
       delete _pDec;
     }
 
@@ -202,15 +232,10 @@ public:
    * false if unchanged.
    */
   virtual bool endData() override {
-    if (nullptr != _decoderListener  && _listener != nullptr) {
-      for (auto & row : _decoderListener->_rows) {
-        if (row.count(COLISFOUND) == 0) {
-          _listener->onRemoved(row);
-          _removeCount++;
-        }
-      }
+    if (_listener != nullptr && !_histEncodedRows.empty()) {
+      _decodeAndNotifyRemovedRows();
     }
-    // TODO: find all removed entries
+
     return !(_addCount == 0 && _removeCount == 0);
   }
 
@@ -224,19 +249,67 @@ public:
 
 protected:
 
+  /*
+   * Assembles header + rows[] in dest binary string
+   */
+  void assembleOnlyRemovedRows(std::string &encodedHeaderRow, std::unordered_set<std::string> &encodedRows, std::vector<uint8_t> &dest) {
+
+    // first determine new size
+
+    size_t len = encodedHeaderRow.size();
+    for (auto & encodedRow : encodedRows) {
+      len += encodedRow.size() + 1;
+    }
+
+    // allocate
+
+    dest.resize(len);
+    uint8_t* p = dest.data();
+
+    // add header row
+    memcpy(p, encodedHeaderRow.data(), encodedHeaderRow.size());
+    p += encodedHeaderRow.size();
+
+    // add each removed row
+
+    for (auto & encodedRow : encodedRows) {
+      *p++ = (uint8_t)TROW;
+      memcpy(p, encodedRow.data(), encodedRow.size());
+      p += encodedRow.size();
+    }
+  }
+
+  /*
+   * Will reassemble parts of historical_data from beginData()
+   */
+  void _decodeAndNotifyRemovedRows() {
+    std::vector<uint8_t> encodedData;
+    MyRowDecoderListener listener(_colIds);
+
+    assembleOnlyRemovedRows(_histEncodedHeaderRow, _histEncodedRows, encodedData);
+
+    crow::Decoder *pDec = crow::DecoderFactory::New(encodedData.data(), encodedData.size());
+
+    pDec->decode(listener);
+
+    for (auto & row : listener._rows) {
+
+        _listener->onRemoved(row);
+        _removeCount++;
+    }
+
+    delete pDec;
+  }
+  
   bool _lookupEncodedRow(const uint8_t* ptr, size_t len) {
-    if (nullptr == _decoderListener || _decoderListener->_encodedRows.empty()) { return false; }
+    if (_histEncodedRows.empty()) { return false; }
 
     std::string key;
     key.append((const char *)ptr, len);
-    auto fit = _decoderListener->_encodedRows.find(key);
-    if (fit != _decoderListener->_encodedRows.end()) {
-      size_t rowIndex = fit->second;
-      if (rowIndex < 0 || rowIndex >= _decoderListener->_rows.size()) {
-        assert(false);
-      } else {
-        _decoderListener->_rows[rowIndex][COLISFOUND] = true;
-      }
+    auto fit = _histEncodedRows.find(key);
+    if (fit != _histEncodedRows.end()) {
+      _histEncodedRows.erase(fit);
+
       return true;
     }
 
@@ -249,7 +322,10 @@ protected:
   SPDiffResultsListener _listener;
   crow::Encoder *_pEnc {nullptr};
   std::vector<SPFieldDef> _colIds;
-  std::shared_ptr<MyDecoderListener> _decoderListener;
+
+  std::unordered_set<std::string> _histEncodedRows;
+  std::string _histEncodedHeaderRow;
+  size_t _histTotalRows;
 };
 
   std::shared_ptr<ResultsSerializer> CrowResultsSerializerNew() {
