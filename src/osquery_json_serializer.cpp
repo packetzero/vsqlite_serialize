@@ -23,6 +23,10 @@ public:
     _addCount = 0;
     _removeCount = 0;
     _listener = listener;
+    _prevRows.clear();
+    _addedRows.clear();
+    _removedRows.clear();
+    _results.clear();
 
     if (!historical_data.empty()) {
       _decodeRowArray(historical_data);
@@ -82,6 +86,7 @@ public:
    */
   virtual void serialize(std::string &dest) override {
     doc.SetArray();
+    doc.Clear();
     for (auto &row : _results) {
       _serializeRow(doc, row);
     }

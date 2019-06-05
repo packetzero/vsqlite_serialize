@@ -150,6 +150,7 @@ public:
     _addCount = 0;
     _removeCount = 0;
     _listener = listener;
+    _histEncodedRows.clear();
     if (nullptr != _pEnc) { delete _pEnc; }
 
     _pEnc = crow::EncoderFactory::New();

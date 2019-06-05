@@ -43,6 +43,7 @@ endif()
 FIND_LIBRARY(VSQLITE_LIB vsqlite HINT ${VSQLITE_DIR}/lib )
 
 add_subdirectory(src)
+add_subdirectory(benchmarks)
 
 if(DEFINED ENV{GTEST_DIR})
   set(GTEST_DIR $ENV{GTEST_DIR})
