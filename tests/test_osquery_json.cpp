@@ -4,7 +4,7 @@
 #include "../include/vsqlite_serialize.h"
 #include "../src/utils.h"
 
-class JsonTest : public ::testing::Test {
+class OsqueryJsonTest : public ::testing::Test {
 protected:
   virtual void SetUp() {  }
 };
@@ -56,11 +56,9 @@ struct MyDiffResultsListener: public vsqlite::DiffResultsListener {
   std::vector<std::string> removes;
 };
 
-static std::string gExpected1 = "{\"name\":\"bob\",\"age\":\"32\",\"active\":\"1\"}\n"
-"{\"name\":\"Judy\",\"active\":\"0\"}\n"
-"{\"name\":\"Coco\",\"age\":\"3\"}\n";
+static std::string gExpected1 = "[{\"active\":\"1\",\"age\":\"32\",\"name\":\"bob\"},{\"active\":\"0\",\"name\":\"Judy\"},{\"age\":\"3\",\"name\":\"Coco\"}]";
 
-static std::string gExpected1_row1only = "{\"name\":\"Judy\",\"active\":\"0\"}\n";
+static std::string gExpected1_row1only = "[{\"active\":\"0\",\"name\":\"Judy\"}]";
 
 static const std::vector<DynMap> &ExampleData1() {
   static std::vector<DynMap> _rows;
@@ -83,8 +81,8 @@ static const std::vector<DynMap> &ExampleData1() {
   return _rows;
 }
 
-TEST_F(JsonTest, basic_add_no_history) {
-  std::shared_ptr<vsqlite::ResultsSerializer>  spSerializer = vsqlite::ResultsSerializerNew(JSON_SERIALIZER_ID);
+TEST_F(OsqueryJsonTest, basic_add_no_history) {
+  std::shared_ptr<vsqlite::ResultsSerializer>  spSerializer = vsqlite::ResultsSerializerNew(OSQUERY_JSON_SERIALIZER_ID);
   auto spListener = std::make_shared<MyDiffResultsListener>();
   std::string historicalData = "";
   spSerializer->beginData(historicalData, spListener, cols);
@@ -117,57 +115,57 @@ TEST_F(JsonTest, basic_add_no_history) {
   EXPECT_EQ(gExpected1, serialized);
 }
 
-TEST_F(JsonTest, basic_add_same_history) {
-  std::shared_ptr<vsqlite::ResultsSerializer>  spSerializer = vsqlite::ResultsSerializerNew(JSON_SERIALIZER_ID);
+TEST_F(OsqueryJsonTest, basic_add_same_history) {
+  std::shared_ptr<vsqlite::ResultsSerializer>  spSerializer = vsqlite::ResultsSerializerNew(OSQUERY_JSON_SERIALIZER_ID);
   auto spListener = std::make_shared<MyDiffResultsListener>();
   spSerializer->beginData(gExpected1, spListener, cols);
-  
+
   auto rows = ExampleData1();
-  
+
   bool isNewRow = spSerializer->addNewResult(rows[0]);
   EXPECT_FALSE(isNewRow);
-  
+
   isNewRow = spSerializer->addNewResult(rows[1]);
   EXPECT_FALSE(isNewRow);
-  
+
   isNewRow = spSerializer->addNewResult(rows[2]);
   EXPECT_FALSE(isNewRow);
-  
+
   bool hasChanged = spSerializer->endData();
   EXPECT_FALSE(hasChanged);
-  
-  
+
+
   ASSERT_EQ(0, spListener->adds.size());
   ASSERT_EQ(0, spListener->removes.size());
-  
+
 }
 
-TEST_F(JsonTest, basic_remove_two) {
-  std::shared_ptr<vsqlite::ResultsSerializer>  spSerializer = vsqlite::ResultsSerializerNew();
+TEST_F(OsqueryJsonTest, basic_remove_two) {
+  std::shared_ptr<vsqlite::ResultsSerializer>  spSerializer = vsqlite::ResultsSerializerNew(OSQUERY_JSON_SERIALIZER_ID);
   auto spListener = std::make_shared<MyDiffResultsListener>();
   spSerializer->beginData(gExpected1, spListener, cols);
-  
+
   auto rows = ExampleData1();
-  
+
   //bool isNewRow = spSerializer->addNewResult(rows[0]);
-  
+
   bool isNewRow = spSerializer->addNewResult(rows[1]);
   EXPECT_FALSE(isNewRow);
-  
+
   //isNewRow = spSerializer->addNewResult(rows[2]);
-  
+
   bool hasChanged = spSerializer->endData();
   EXPECT_TRUE(hasChanged);
-  
-  
+
+
   ASSERT_EQ(0, spListener->adds.size());
   ASSERT_EQ(2, spListener->removes.size());
-  
+
   // serialize
-  
+
   std::string serialized;
   spSerializer->serialize(serialized);
   ASSERT_FALSE(serialized.empty());
-  
+
   EXPECT_EQ(gExpected1_row1only, serialized);
 }

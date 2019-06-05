@@ -1,34 +1,21 @@
 #include "../include/vsqlite_serialize.h"
 
-//namespace rapidjson {
-//using SizeType = ::std::size_t;
-//} // namespace rapidjson
-
 #include <rapidjson/document.h>
 #include <rapidjson/stringbuffer.h>
 #include <rapidjson/writer.h>
 #include <sstream>
-#include <unordered_set>
+#include <set>
 
 namespace rj = rapidjson;
 
-static void SPLIT(const std::string &s, char delim, std::unordered_set<std::string> &dest) {
-  std::stringstream ss(s);
-  std::string item;
-  while (std::getline(ss, item, delim)) {
-    if (item.empty()) { continue; }
-    if (item[0] == ' ') { item.erase(0); }
-    if (item[item.size()-1] == ' ') { item.erase(item.size()-1); }
-    if (item.empty()) { continue; }
-    dest.insert(item);
-  }
-}
 
 namespace vsqlite {
 
-class JSONResultsSerializer : public ResultsSerializer {
+typedef std::map<std::string,std::string> Row;
+
+class OsqueryResultsSerializer : public ResultsSerializer {
 public:
-  virtual ~JSONResultsSerializer() {}
+  virtual ~OsqueryResultsSerializer() {}
   /**
    * Initialize with historical data and optional listener.
    */
@@ -45,7 +32,7 @@ public:
     }
 
     if (!historical_data.empty()) {
-      SPLIT(historical_data, '\n', _encodedLines);
+      _decodeRowArray(historical_data);
     }
 
     return false;
@@ -67,24 +54,32 @@ public:
       }
     }
 
-    std::string row_json;
-    _serializeRow(row, row_json);
+    // convert to stringmap
 
-    // append to running encoding
-    _ss << row_json << "\n";
+    Row r;
+    for (auto &it : row) {
+      if (!it.second.valid()) { continue; }
+      r[it.first->name] = it.second.as_s();
+    }
 
     // lookup
-
-    auto fit = _encodedLines.find(row_json);
-    if (fit != _encodedLines.end()) {
+    
+    auto fit = _prevRows.find(r);
+    if (fit != _prevRows.end()) {
       wasFoundInHistoricalResults = true;
-      _encodedLines.erase(fit);
+      _prevRows.erase(fit);
     }
 
-    if (!wasFoundInHistoricalResults && _listener) {
+    if (!wasFoundInHistoricalResults) {
+      if (_listener) {
+        _listener->onAdded(row);
+      }
+      _addedRows.push_back(r);
       _addCount++;
-      _listener->onAdded(row);
     }
+
+    _results.push_back(r);
+
     return !wasFoundInHistoricalResults;
   }
 
@@ -95,15 +90,11 @@ public:
    * false if unchanged.
    */
   virtual bool endData() override {
-    if (_listener && !_encodedLines.empty()) {
-      for (auto &encLine : _encodedLines) {
-        DynMap row;
-        if (_decodeRow(encLine, row)) {
-          // fail
-        } else {
-          _listener->onRemoved(row);
+    if (_listener && !_prevRows.empty()) {
+      for (auto &row : _prevRows) {
+        DynMap tmp;
+        _listener->onRemoved(tmp); // TODO: pass templatized row
           _removeCount++;
-        }
       }
     }
     // TODO: find all removed entries
@@ -114,10 +105,57 @@ public:
    * Serializes the current data snapshot into dest.
    */
   virtual void serialize(std::string &dest) override {
-    dest = _ss.str();
+    doc.SetArray();
+    for (auto &row : _results) {
+      _serializeRow(doc, row);
+    }
+    
+    // render to string
+    
+    rj::StringBuffer buffer;
+    rj::Writer<rj::StringBuffer> writer(buffer);
+    doc.Accept(writer);
+
+    dest = buffer.GetString();
   }
 
 protected:
+  
+  bool deserializeRow(const rj::Value& doc, Row& r) {
+    if (!doc.IsObject()) {
+      return true;
+    }
+    
+    for (const auto& i : doc.GetObject()) {
+      std::string name(i.name.GetString());
+      if (!name.empty() && i.value.IsString()) {
+        r[name] = i.value.GetString();
+      }
+    }
+    return false;
+  }
+  
+  bool _decodeRowArray(std::string &json) {
+    rj::Document doc;
+    
+    if (doc.Parse(json.c_str()).HasParseError()) {
+      // TODO: log
+      return true;
+    }
+    if (!doc.IsArray()) {
+      return true;
+    }
+    for (const auto& i : doc.GetArray()) {
+      Row r;
+      auto status = deserializeRow(i, r);
+      if (status) {
+        return status;
+      }
+      _prevRows.insert(std::move(r));
+    }
+    return false;
+
+  }
 
   /*
    * The decoder creates field infos as it decodes, and they
@@ -133,32 +171,6 @@ protected:
     return nullptr;
   }
 
-  /*
-   * return true on error, false on success
-   */
-  bool _decodeRow(const std::string &encRow, DynMap &row) {
-    rj::Document doc;
-    if (doc.Parse(encRow.c_str()).HasParseError()) {
-      // TODO: log
-      return true;
-    }
-    if (!doc.IsObject()) {
-      return true;
-    }
-
-    for (const auto& i : doc.GetObject()) {
-      std::string name(i.name.GetString());
-      if (!name.empty() && i.value.IsString()) {
-        auto id = GetAppColumnId(name);
-        if (id == nullptr) {
-          // TODO: log
-        } else {
-          row[id] = i.value.GetString();
-        }
-      }
-    }
-    return false;
-  }
 
   inline rj::Value SVAL(const std::string &str) {
     rj::Value retval;
@@ -166,7 +178,7 @@ protected:
     return retval;
   }
 
-  void _serializeRow(DynMap &row, std::string &dest) {
+  void _serializeRow(rj::Value &arr, DynMap &row) {
     rj::Value obj(rj::kObjectType);
 
     for (auto &id : _colIds) {
@@ -176,13 +188,19 @@ protected:
       }
       obj.AddMember(SVAL(id->name),SVAL(row[id].as_s()),doc.GetAllocator());
     }
-    // render to string
 
-    rj::StringBuffer buffer;
-    rj::Writer<rj::StringBuffer> writer(buffer);
-    obj.Accept(writer);
+    arr.PushBack(obj, doc.GetAllocator());
+  }
 
-    dest = buffer.GetString();
+  void _serializeRow(rj::Value &arr, Row &row) {
+    rj::Value obj(rj::kObjectType);
+    
+    for (auto &it : row) {
+      obj.AddMember(SVAL(it.first),SVAL(it.second),doc.GetAllocator());
+    }
+    arr.PushBack(rj::Value(obj, doc.GetAllocator()).Move(),
+                 doc.GetAllocator());
+    //arr.PushBack(obj, doc.GetAllocator());
   }
 
   // members
@@ -192,24 +210,14 @@ protected:
   std::vector<SPFieldDef> _colIds;
   rj::Document doc;
   std::stringstream _ss;
-  std::unordered_set<std::string> _encodedLines;
+  std::multiset<Row> _prevRows;
+  std::vector<Row> _results;
+  std::vector<Row> _addedRows;
+  std::vector<Row> _removedRows;
 };
 
-  std::shared_ptr<ResultsSerializer> JSONResultsSerializerNew() {
-    return std::make_shared<JSONResultsSerializer>();
+  std::shared_ptr<ResultsSerializer> OsqueryResultsSerializerNew() {
+    return std::make_shared<OsqueryResultsSerializer>();
   }
 
-  extern std::shared_ptr<ResultsSerializer> CrowResultsSerializerNew();
-  extern std::shared_ptr<ResultsSerializer> OsqueryResultsSerializerNew();
-
-  std::shared_ptr<ResultsSerializer> ResultsSerializerNew(char id) {
-    switch(id) {
-      case JSON_SERIALIZER_ID: return JSONResultsSerializerNew();
-      case CROW_SERIALIZER_ID: return CrowResultsSerializerNew();
-      case OSQUERY_JSON_SERIALIZER_ID: return OsqueryResultsSerializerNew();
-      default:
-        break;
-    }
-    return nullptr;
-  }
 } // namespace vsqlite

@@ -46,6 +46,7 @@ namespace vsqlite {
 
 #define CROW_SERIALIZER_ID 'c'
 #define JSON_SERIALIZER_ID 'j'
+#define OSQUERY_JSON_SERIALIZER_ID 'o'
 
   /*
    * @param id 'c' for crow, 'j' for json
