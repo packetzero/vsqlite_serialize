@@ -9,47 +9,32 @@ protected:
   virtual void SetUp() {  }
 };
 
-static const SPFieldDef fname = FieldDef::alloc(TSTRING, "name");
-static const SPFieldDef fage = FieldDef::alloc(TINT32, "age");
-static const SPFieldDef factive = FieldDef::alloc(TUINT8, "active");
-
-// in order to be able to consistently traverse rows in same column order...
-
-static std::vector<SPFieldDef> cols = { fname, fage, factive };
+typedef vsqlite::StringMap Row;
 
 // this is very simple, no escaping.  Just a way to get a printable value
-static std::string SimpleRowToJSONString(DynMap &row) {
+static std::string SimpleRowToJSONString( Row &row) {
   std::string s;
   int i=-1;
-  for (auto colId : cols) {
+  for (auto &it : row) {
     i++;
-
-    DynVal &val = row[colId];
-    if (!val.valid()) {
-      continue;
-    }
 
     if (!s.empty()) { s += ", "; }
 
-    s += colId->name + ":";
-    if (val.type() == TSTRING) {
-      s += "\"" + val.as_s() + "\"";
-    } else {
-      s += val.as_s();
-    }
+    s += it.first + ":";
+    s += "\"" + it.second + "\"";
   }
   return "{" + s + "}";
 }
 
 
-struct MyDiffResultsListener: public vsqlite::DiffResultsListener {
-  virtual ~MyDiffResultsListener() {}
+struct StringMapDiffResultsListener: public vsqlite::DiffResultsListener<Row > {
+  virtual ~StringMapDiffResultsListener() {}
 
-  void onAdded(DynMap &row) override {
+  void onAdded(Row &row) override {
     adds.push_back(SimpleRowToJSONString(row));
   }
 
-  void onRemoved(DynMap &row) override {
+  void onRemoved(Row &row) override {
     removes.push_back(SimpleRowToJSONString(row));
   }
   std::vector<std::string> adds;
@@ -60,34 +45,34 @@ static std::string gExpected1 = "[{\"active\":\"1\",\"age\":\"32\",\"name\":\"bo
 
 static std::string gExpected1_row1only = "[{\"active\":\"0\",\"name\":\"Judy\"}]";
 
-static const std::vector<DynMap> &ExampleData1() {
-  static std::vector<DynMap> _rows;
+static std::vector<Row> &ExampleData1() {
+  static std::vector<Row> _rows;
   if (_rows.empty()) {
     _rows.resize(3);
-    DynMap &row = _rows[0];
-    row[fname] = "bob";
-    row[fage] = 32;
-    row[factive] = true;
+    auto &row = _rows[0];
+    row["name"] = "bob";
+    row["age"] = "32";
+    row["active"] = "1";
 
-    DynMap &row2 = _rows[1];
-    row2[fname] = "Judy";
-    row2[fage] = DynVal(); // null / notset
-    row2[factive] = false;
+    auto &row2 = _rows[1];
+    row2["name"] = "Judy";
+    row2["active"] = "0";
 
-    DynMap &row3 = _rows[2];
-    row3[fname] = "Coco";
-    row3[fage] = 3;
+    auto &row3 = _rows[2];
+    row3["name"] = "Coco";
+    row3["age"] = "3";
   }
   return _rows;
 }
 
 TEST_F(OsqueryJsonTest, basic_add_no_history) {
-  std::shared_ptr<vsqlite::ResultsSerializer>  spSerializer = vsqlite::ResultsSerializerNew(OSQUERY_JSON_SERIALIZER_ID);
-  auto spListener = std::make_shared<MyDiffResultsListener>();
+  auto spSerializer = vsqlite::OsqueryJsonResultsSerializerNew();
+  auto spListener = std::make_shared<StringMapDiffResultsListener>();
   std::string historicalData = "";
+  std::vector<SPFieldDef> cols;
   spSerializer->beginData(historicalData, spListener, cols);
 
-  auto rows = ExampleData1();
+  auto& rows = ExampleData1();
 
   bool isNewRow = spSerializer->addNewResult(rows[0]);
   EXPECT_TRUE(isNewRow);
@@ -116,8 +101,10 @@ TEST_F(OsqueryJsonTest, basic_add_no_history) {
 }
 
 TEST_F(OsqueryJsonTest, basic_add_same_history) {
-  std::shared_ptr<vsqlite::ResultsSerializer>  spSerializer = vsqlite::ResultsSerializerNew(OSQUERY_JSON_SERIALIZER_ID);
-  auto spListener = std::make_shared<MyDiffResultsListener>();
+  auto spSerializer = vsqlite::OsqueryJsonResultsSerializerNew();
+  auto spListener = std::make_shared<StringMapDiffResultsListener>();
+  std::vector<SPFieldDef> cols;
+
   spSerializer->beginData(gExpected1, spListener, cols);
 
   auto rows = ExampleData1();
@@ -141,8 +128,9 @@ TEST_F(OsqueryJsonTest, basic_add_same_history) {
 }
 
 TEST_F(OsqueryJsonTest, basic_remove_two) {
-  std::shared_ptr<vsqlite::ResultsSerializer>  spSerializer = vsqlite::ResultsSerializerNew(OSQUERY_JSON_SERIALIZER_ID);
-  auto spListener = std::make_shared<MyDiffResultsListener>();
+  auto spSerializer = vsqlite::OsqueryJsonResultsSerializerNew();
+  auto spListener = std::make_shared<StringMapDiffResultsListener>();
+  std::vector<SPFieldDef> cols;
   spSerializer->beginData(gExpected1, spListener, cols);
 
   auto rows = ExampleData1();

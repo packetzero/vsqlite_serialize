@@ -137,7 +137,7 @@ namespace vsqlite {
   };
 
   
-class CrowResultsSerializer : public ResultsSerializer {
+class CrowResultsSerializer : public ResultsSerializer<DynMap> {
 public:
   virtual ~CrowResultsSerializer() {
     if (nullptr != _pEnc) { delete _pEnc; }
@@ -328,7 +328,7 @@ protected:
   size_t _histTotalRows;
 };
 
-  std::shared_ptr<ResultsSerializer> CrowResultsSerializerNew() {
+  std::shared_ptr<ResultsSerializer<DynMap> > CrowResultsSerializerNew() {
     return std::make_shared<CrowResultsSerializer>();
   }
 

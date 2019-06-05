@@ -42,7 +42,7 @@ static std::string SimpleRowToJSONString(DynMap &row) {
 }
 
 
-struct MyDiffResultsListener: public vsqlite::DiffResultsListener {
+struct MyDiffResultsListener: public vsqlite::DiffResultsListener<DynMap> {
   virtual ~MyDiffResultsListener() {}
 
   void onAdded(DynMap &row) override {
@@ -84,7 +84,7 @@ static const std::vector<DynMap> &ExampleData1() {
 }
 
 TEST_F(JsonTest, basic_add_no_history) {
-  std::shared_ptr<vsqlite::ResultsSerializer>  spSerializer = vsqlite::ResultsSerializerNew(JSON_SERIALIZER_ID);
+  auto spSerializer = vsqlite::JsonResultsSerializerNew();
   auto spListener = std::make_shared<MyDiffResultsListener>();
   std::string historicalData = "";
   spSerializer->beginData(historicalData, spListener, cols);
@@ -118,7 +118,7 @@ TEST_F(JsonTest, basic_add_no_history) {
 }
 
 TEST_F(JsonTest, basic_add_same_history) {
-  std::shared_ptr<vsqlite::ResultsSerializer>  spSerializer = vsqlite::ResultsSerializerNew(JSON_SERIALIZER_ID);
+  auto spSerializer = vsqlite::JsonResultsSerializerNew();
   auto spListener = std::make_shared<MyDiffResultsListener>();
   spSerializer->beginData(gExpected1, spListener, cols);
   
@@ -143,7 +143,7 @@ TEST_F(JsonTest, basic_add_same_history) {
 }
 
 TEST_F(JsonTest, basic_remove_two) {
-  std::shared_ptr<vsqlite::ResultsSerializer>  spSerializer = vsqlite::ResultsSerializerNew();
+  auto spSerializer = vsqlite::JsonResultsSerializerNew();
   auto spListener = std::make_shared<MyDiffResultsListener>();
   spSerializer->beginData(gExpected1, spListener, cols);
   

@@ -41,7 +41,7 @@ std::string SimpleRowToJSONString(DynMap &row) {
 }
 
 
-struct MyDiffResultsListener: public vsqlite::DiffResultsListener {
+struct MyDiffResultsListener: public vsqlite::DiffResultsListener<DynMap> {
   virtual ~MyDiffResultsListener() {}
 
   void onAdded(DynMap &row) override {
@@ -79,7 +79,7 @@ static const std::vector<DynMap> &ExampleData1() {
 }
 
 TEST_F(CrowTest, basic_add_no_history) {
-  std::shared_ptr<vsqlite::ResultsSerializer>  spSerializer = vsqlite::ResultsSerializerNew(CROW_SERIALIZER_ID);
+  auto spSerializer = vsqlite::CrowResultsSerializerNew();
   auto spListener = std::make_shared<MyDiffResultsListener>();
   std::string historicalData = "";
   spSerializer->beginData(historicalData, spListener, cols);
@@ -116,7 +116,7 @@ TEST_F(CrowTest, basic_add_no_history) {
 }
 
 TEST_F(CrowTest, basic_add_same_history) {
-  std::shared_ptr<vsqlite::ResultsSerializer>  spSerializer = vsqlite::ResultsSerializerNew(CROW_SERIALIZER_ID);
+  auto spSerializer = vsqlite::CrowResultsSerializerNew();
   auto spListener = std::make_shared<MyDiffResultsListener>();
   std::string historicalData;
   vsqlite_utils::HexStringToBinString(gExpectedHex1, historicalData);
@@ -143,7 +143,7 @@ TEST_F(CrowTest, basic_add_same_history) {
 }
 
 TEST_F(CrowTest, basic_remove_two) {
-  std::shared_ptr<vsqlite::ResultsSerializer>  spSerializer = vsqlite::ResultsSerializerNew(CROW_SERIALIZER_ID);
+  auto spSerializer = vsqlite::CrowResultsSerializerNew();
   auto spListener = std::make_shared<MyDiffResultsListener>();
   std::string historicalData;
   vsqlite_utils::HexStringToBinString(gExpectedHex1, historicalData);

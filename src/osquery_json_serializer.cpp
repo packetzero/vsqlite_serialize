@@ -13,23 +13,16 @@ namespace vsqlite {
 
 typedef std::map<std::string,std::string> Row;
 
-class OsqueryResultsSerializer : public ResultsSerializer {
+class OsqueryResultsSerializer : public ResultsSerializer<StringMap> {
 public:
   virtual ~OsqueryResultsSerializer() {}
   /**
    * Initialize with historical data and optional listener.
    */
-  virtual bool beginData(std::string &historical_data, SPDiffResultsListener listener, std::vector<SPFieldDef> &knownColumnIds) override {
+  virtual bool beginData(std::string &historical_data, SPDiffResultsListenerStringMap listener, std::vector<SPFieldDef> &knownColumnIds) override {
     _addCount = 0;
     _removeCount = 0;
     _listener = listener;
-
-    _colIds.clear();
-
-    // add known columns
-    if (!knownColumnIds.empty()) {
-      for (auto &id : knownColumnIds) { _colIds.push_back(id); }
-    }
 
     if (!historical_data.empty()) {
       _decodeRowArray(historical_data);
@@ -43,28 +36,12 @@ public:
    * will be called.
    * @returns true if row was not in historical_data.
    */
-  virtual bool addNewResult(DynMap &row) override {
+  virtual bool addNewResult(StringMap &row) override {
     bool wasFoundInHistoricalResults = false;
 
-    // get column ids if not set
-
-    if (_colIds.empty()) {
-      for (auto &it : row) {
-        _colIds.push_back(it.first);
-      }
-    }
-
-    // convert to stringmap
-
-    Row r;
-    for (auto &it : row) {
-      if (!it.second.valid()) { continue; }
-      r[it.first->name] = it.second.as_s();
-    }
-
     // lookup
-    
-    auto fit = _prevRows.find(r);
+
+    auto fit = _prevRows.find(row);
     if (fit != _prevRows.end()) {
       wasFoundInHistoricalResults = true;
       _prevRows.erase(fit);
@@ -74,11 +51,11 @@ public:
       if (_listener) {
         _listener->onAdded(row);
       }
-      _addedRows.push_back(r);
+      _addedRows.push_back(row);
       _addCount++;
     }
 
-    _results.push_back(r);
+    _results.push_back(row);
 
     return !wasFoundInHistoricalResults;
   }
@@ -92,8 +69,7 @@ public:
   virtual bool endData() override {
     if (_listener && !_prevRows.empty()) {
       for (auto &row : _prevRows) {
-        DynMap tmp;
-        _listener->onRemoved(tmp); // TODO: pass templatized row
+        _listener->onRemoved((StringMap&)row);
           _removeCount++;
       }
     }
@@ -109,9 +85,9 @@ public:
     for (auto &row : _results) {
       _serializeRow(doc, row);
     }
-    
+
     // render to string
-    
+
     rj::StringBuffer buffer;
     rj::Writer<rj::StringBuffer> writer(buffer);
     doc.Accept(writer);
@@ -120,12 +96,12 @@ public:
   }
 
 protected:
-  
+
   bool deserializeRow(const rj::Value& doc, Row& r) {
     if (!doc.IsObject()) {
       return true;
     }
-    
+
     for (const auto& i : doc.GetObject()) {
       std::string name(i.name.GetString());
       if (!name.empty() && i.value.IsString()) {
@@ -134,10 +110,10 @@ protected:
     }
     return false;
   }
-  
+
   bool _decodeRowArray(std::string &json) {
     rj::Document doc;
-    
+
     if (doc.Parse(json.c_str()).HasParseError()) {
       // TODO: log
       return true;
@@ -157,20 +133,6 @@ protected:
 
   }
 
-  /*
-   * The decoder creates field infos as it decodes, and they
-   * won't be the exact same instances as the application uses.
-   * This maps them to application field so that comparisons work.
-   */
-  SPFieldDef GetAppColumnId(std::string fieldName) {
-    for (SPFieldDef colId : _colIds) {
-      if (colId->name == fieldName) {
-        return colId;
-      }
-    }
-    return nullptr;
-  }
-
 
   inline rj::Value SVAL(const std::string &str) {
     rj::Value retval;
@@ -178,23 +140,9 @@ protected:
     return retval;
   }
 
-  void _serializeRow(rj::Value &arr, DynMap &row) {
-    rj::Value obj(rj::kObjectType);
-
-    for (auto &id : _colIds) {
-
-      if (!row[id].valid()) {
-        continue;
-      }
-      obj.AddMember(SVAL(id->name),SVAL(row[id].as_s()),doc.GetAllocator());
-    }
-
-    arr.PushBack(obj, doc.GetAllocator());
-  }
-
   void _serializeRow(rj::Value &arr, Row &row) {
     rj::Value obj(rj::kObjectType);
-    
+
     for (auto &it : row) {
       obj.AddMember(SVAL(it.first),SVAL(it.second),doc.GetAllocator());
     }
@@ -206,8 +154,7 @@ protected:
   // members
   uint32_t _addCount { 0 };
   uint32_t _removeCount { 0 };
-  SPDiffResultsListener _listener;
-  std::vector<SPFieldDef> _colIds;
+  SPDiffResultsListenerStringMap _listener;
   rj::Document doc;
   std::stringstream _ss;
   std::multiset<Row> _prevRows;
@@ -216,7 +163,7 @@ protected:
   std::vector<Row> _removedRows;
 };
 
-  std::shared_ptr<ResultsSerializer> OsqueryResultsSerializerNew() {
+  std::shared_ptr<ResultsSerializer<StringMap> > OsqueryJsonResultsSerializerNew() {
     return std::make_shared<OsqueryResultsSerializer>();
   }
 

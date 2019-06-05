@@ -26,7 +26,7 @@ static void SPLIT(const std::string &s, char delim, std::unordered_set<std::stri
 
 namespace vsqlite {
 
-class JSONResultsSerializer : public ResultsSerializer {
+class JSONResultsSerializer : public ResultsSerializer<DynMap> {
 public:
   virtual ~JSONResultsSerializer() {}
   /**
@@ -195,21 +195,8 @@ protected:
   std::unordered_set<std::string> _encodedLines;
 };
 
-  std::shared_ptr<ResultsSerializer> JSONResultsSerializerNew() {
+  std::shared_ptr<ResultsSerializer<DynMap> > JsonResultsSerializerNew() {
     return std::make_shared<JSONResultsSerializer>();
   }
 
-  extern std::shared_ptr<ResultsSerializer> CrowResultsSerializerNew();
-  extern std::shared_ptr<ResultsSerializer> OsqueryResultsSerializerNew();
-
-  std::shared_ptr<ResultsSerializer> ResultsSerializerNew(char id) {
-    switch(id) {
-      case JSON_SERIALIZER_ID: return JSONResultsSerializerNew();
-      case CROW_SERIALIZER_ID: return CrowResultsSerializerNew();
-      case OSQUERY_JSON_SERIALIZER_ID: return OsqueryResultsSerializerNew();
-      default:
-        break;
-    }
-    return nullptr;
-  }
 } // namespace vsqlite
