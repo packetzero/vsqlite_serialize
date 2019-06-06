@@ -289,6 +289,12 @@ int main(int argc, char *argv[])
     auto spSerializer = vsqlite::OsqueryJsonResultsSerializerNew();
     test_stringmap(totalRows, numIterations, spSerializer);
 
+  } else if (serializerName == "stringmapjson") {
+    
+    fprintf(stderr, "Start total:%d iterations:%d serializer:%s\n", totalRows, numIterations, serializerName.c_str());
+    auto spSerializer = vsqlite::JsonStringMapResultsSerializerNew();
+    test_stringmap(totalRows, numIterations, spSerializer);
+    
   } else {
     fprintf(stderr, "Start total:%d iterations:%d serializer:crow\n", totalRows, numIterations);
     auto spSerializer = vsqlite::CrowResultsSerializerNew();

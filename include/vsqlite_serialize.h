@@ -52,4 +52,5 @@ namespace vsqlite {
   std::shared_ptr<ResultsSerializer<DynMap> > CrowResultsSerializerNew();
   std::shared_ptr<ResultsSerializer<DynMap> > JsonResultsSerializerNew();
   std::shared_ptr<ResultsSerializer<StringMap> > OsqueryJsonResultsSerializerNew();
+  std::shared_ptr<ResultsSerializer<StringMap> > JsonStringMapResultsSerializerNew();
 }
